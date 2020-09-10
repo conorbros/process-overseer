@@ -51,9 +51,28 @@ char *get_time()
     return buffer;
 }
 
-void execute_command(command_t *cmd)
+void print_exec_cmd_log(command_t *cmd)
 {
-    printf("%s - attempting to execute %s\n", get_time(), cmd->file);
+    char *output;
+    int len = cmd->file;
+    for (int i = 0; i < cmd->argc; i++)
+    {
+        len += strlen(cmd->argv[i]) + 2;
+    }
+    output = (char *)malloc(len);
+    sprintf(output, "%s - attempting to execute %s", get_time(), cmd->file);
+    printf("%s", output);
+    for (int i = 0; i < cmd->argc; i++)
+    {
+        printf(" %s", cmd->argv[i]);
+    }
+    printf("\n");
+    free(output);
+}
+
+void exec_cmd(command_t *cmd)
+{
+    print_exec_cmd_log(cmd);
 }
 
 void add_request(void (*func)(void *), void *data)
@@ -235,7 +254,7 @@ void handle_conn(void *arg)
 
         close_sock(*sockfd);
 
-        execute_command(cmd);
+        exec_cmd(cmd);
     }
 }
 
