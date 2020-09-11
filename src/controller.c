@@ -83,13 +83,13 @@ void send_cmd_field(int sockfd, char *field)
     if (send(sockfd, &val, sizeof(int), PF_UNSPEC) == -1)
     {
         perror("send");
-        exit(1);
+        exit(EXIT_FAILURE);
     }
 
     if (send(sockfd, field, len, PF_UNSPEC) == -1)
     {
         perror("send");
-        exit(1);
+        exit(EXIT_FAILURE);
     }
 }
 
@@ -100,12 +100,12 @@ void send_cmd_arg(int sockfd, char *arg)
     if (send(sockfd, &val, sizeof(int), PF_UNSPEC) == -1)
     {
         perror("send");
-        exit(1);
+        exit(EXIT_FAILURE);
     }
     if (send(sockfd, arg, len, PF_UNSPEC) == -1)
     {
         perror("send");
-        exit(1);
+        exit(EXIT_FAILURE);
     }
 }
 
@@ -134,7 +134,7 @@ int main(int argc, char *argv[])
     if (argc < 3)
     {
         print_usage();
-        exit(1);
+        exit(EXIT_FAILURE);
     }
 
     command_t *cmd = malloc(sizeof(command_t));
@@ -145,7 +145,7 @@ int main(int argc, char *argv[])
     if (!is_str_number(argv[2]))
     {
         print_usage();
-        exit(1);
+        exit(EXIT_FAILURE);
     }
     port = atoi(argv[2]);
 
@@ -158,7 +158,7 @@ int main(int argc, char *argv[])
     if ((sockfd = socket(AF_INET, SOCK_STREAM, PF_UNSPEC)) == -1)
     {
         perror("socket");
-        exit(1);
+        exit(EXIT_FAILURE);
     }
 
     /* clear address struct */
@@ -179,10 +179,9 @@ int main(int argc, char *argv[])
     if (send(sockfd, &msg_type, sizeof(int), PF_UNSPEC) == -1)
     {
         perror("send");
-        exit(1);
+        exit(EXIT_FAILURE);
     }
 
-    
     send_cmd_field(sockfd, cmd->file);
 
     if (cmd->log == NULL)
