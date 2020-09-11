@@ -25,6 +25,8 @@
 pthread_mutex_t request_mutex;
 pthread_mutex_t quit_mutex;
 
+pthread_mutex_t process_mutex;
+
 pthread_cond_t got_request;
 
 int num_requests = 0;
@@ -36,6 +38,15 @@ struct request
     void *data;
     struct request *next;
 };
+
+typedef struct process
+{
+    pid_t pid;
+    char time[26];
+    struct process *next;
+} process_t;
+
+process_t *processes = NULL;
 
 struct request *requests = NULL;
 struct request *last_request = NULL;
