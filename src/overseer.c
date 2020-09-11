@@ -62,14 +62,52 @@ char *get_time()
     return buffer;
 }
 
-void print_exec_cmd_log(command_t *cmd)
+void print_exec_cmd(command_t *cmd, process_t *proc)
 {
     char *output;
-    int len = cmd->file;
+    int len = strlen(cmd->file) + 26;
+    output = (char *)malloc(len);
+    sprintf(output, "%s - %s", get_time(), cmd->file);
+    printf("%s", output);
     for (int i = 0; i < cmd->argc; i++)
     {
-        len += strlen(cmd->argv[i]) + 2;
+        printf(" %s", cmd->argv[i]);
     }
+    printf("has been executed with pid %d\n", proc->pid);
+    free(output);
+}
+
+process_t *add_process(pid_t pid)
+{
+    process_t *new_process;
+    new_process = (process_t *)malloc(sizeof(process_t));
+    if (!new_process)
+    {
+        fprintf(stderr, "add_process: out of memory\n");
+        exit(EXIT_FAILURE);
+    }
+    new_process->pid = pid;
+    strcpy(new_process->time, get_time());
+    new_process->next = NULL;
+
+    pthread_mutex_lock(&process_mutex);
+    if (processes == NULL)
+    {
+        processes = new_process;
+        new_process->next = NULL;
+    }
+    else
+    {
+        new_process->next = processes;
+        processes = new_process;
+    }
+    return new_process;
+}
+
+void print_exec_cmd_attempt(command_t *cmd)
+{
+    char *output;
+    int len = strlen(cmd->file) + 30 + 26;
     output = (char *)malloc(len);
     sprintf(output, "%s - attempting to execute %s", get_time(), cmd->file);
     printf("%s", output);
@@ -81,9 +119,82 @@ void print_exec_cmd_log(command_t *cmd)
     free(output);
 }
 
+void print_exec_cmd_err(command_t *cmd)
+{
+    char *output;
+    int len = strlen(cmd->file) + 26 + 26;
+    output = (char *)malloc(len);
+    sprintf(output, "%s - could not execute %s", get_time(), cmd->file);
+    printf("%s", output);
+    for (int i = 0; i < cmd->argc; i++)
+    {
+        printf(" %s", cmd->argv[i]);
+    }
+    printf("\n");
+    free(output);
+}
+
+void print_exec_cmd_exit(pid_t pid, int status)
+{
+    printf("%s - %d has terminated with the exit status code %d\n", get_time(), pid, status);
+}
+
+pid_t run_process(command_t *cmd, process_t *proc)
+{
+
+    pid_t pid = fork();
+    if (pid < 0)
+    {
+        fprintf(stderr, "fork() failed\n");
+        exit(EXIT_FAILURE);
+    }
+    else if (pid == 0)
+    {
+        proc = add_process(getpid());
+        print_exec_cmd(cmd, proc);
+        if (cmd->argc > 0)
+        {
+            if (execv(cmd->file, cmd->argv) == -1)
+            {
+                print_exec_cmd_err(cmd);
+            }
+        }
+        else
+        {
+            if (execl(cmd->file, "", NULL) == -1)
+            {
+                print_exec_cmd_err(cmd);
+            }
+        }
+    }
+    else
+    {
+        return pid;
+    }
+    return getpid();
+}
+
 void exec_cmd(command_t *cmd)
 {
-    print_exec_cmd_log(cmd);
+    print_exec_cmd_attempt(cmd);
+    process_t *proc;
+    pid_t ret = run_process(cmd, proc);
+    if (ret > 0)
+    {
+        int status;
+
+        if (waitpid(ret, &status, 0) == -1)
+        {
+            perror("waitpid");
+            exit(EXIT_FAILURE);
+        }
+
+        if (WIFEXITED(status))
+        {
+            int es = WEXITSTATUS(status);
+            print_exec_cmd_exit(ret, es);
+        }
+    }
 }
 
 void add_request(void (*func)(void *), void *data)
@@ -94,7 +205,7 @@ void add_request(void (*func)(void *), void *data)
     if (!a_request)
     {
         fprintf(stderr, "add_request: out of memory\n");
-        exit(1);
+        exit(EXIT_FAILURE);
     }
     a_request->func = func;
     a_request->data = data;
@@ -187,7 +298,7 @@ void recv_cmd_field(int sockfd, char **field)
     if (recv(sockfd, &recv_len, sizeof(int), PF_UNSPEC) == -1)
     {
         perror("recv");
-        exit(1);
+        exit(EXIT_FAILURE);
     }
     int len = ntohs(recv_len);
 
@@ -195,7 +306,7 @@ void recv_cmd_field(int sockfd, char **field)
     if (recv(sockfd, &recv_char, sizeof(char) * len, PF_UNSPEC) == -1)
     {
         perror("recv");
-        exit(1);
+        exit(EXIT_FAILURE);
     }
     *field = (char *)malloc(len);
     memcpy(*field, recv_char, len);
@@ -214,7 +325,7 @@ void handle_conn(void *arg)
     if (recv(*sockfd, &val, sizeof(int), PF_UNSPEC) == -1)
     {
         perror("recv");
-        exit(1);
+        exit(EXIT_FAILURE);
     }
     msg_t msg = ntohs(val);
 
@@ -228,7 +339,9 @@ void handle_conn(void *arg)
 
         recv_cmd_field(*sockfd, &file);
         cmd->file = strdup(file);
-        free(file);
+        // TODO causes double free error
+        // if (*file)
+        //     free(file);
 
         recv_cmd_field(*sockfd, &log);
         cmd->log = strdup(log);
@@ -248,7 +361,7 @@ void handle_conn(void *arg)
         if (recv(*sockfd, &recv_val, sizeof(int), PF_UNSPEC) == -1)
         {
             perror("recv");
-            exit(1);
+            exit(EXIT_FAILURE);
         }
 
         cmd->argc = ntohs(recv_val);
@@ -266,6 +379,7 @@ void handle_conn(void *arg)
         close_sock(*sockfd);
 
         exec_cmd(cmd);
+        free(cmd);
     }
 }
 
@@ -291,11 +405,12 @@ int main(int argc, char *argv[])
     if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) == -1)
     {
         perror("socket");
-        exit(1);
+        exit(EXIT_FAILURE);
     }
 
     pthread_mutex_init(&request_mutex, NULL);
     pthread_mutex_init(&quit_mutex, NULL);
+    pthread_mutex_init(&process_mutex, NULL);
     pthread_cond_init(&got_request, NULL);
 
     for (i = 0; i < NUM_HANDLER_THREADS; i++)
@@ -317,13 +432,13 @@ int main(int argc, char *argv[])
     if (bind(sockfd, (struct sockaddr *)&my_addr, sizeof(struct sockaddr)) == -1)
     {
         perror("bind");
-        exit(1);
+        exit(EXIT_FAILURE);
     }
 
     if (listen(sockfd, BACKLOG) == -1)
     {
         perror("listen");
-        exit(1);
+        exit(EXIT_FAILURE);
     }
 
     while (1)
@@ -342,7 +457,5 @@ int main(int argc, char *argv[])
         printf("%s - connection received from %s\n", get_time(), inet_ntoa(their_addr.sin_addr));
 
         add_request(handle_conn, fd);
-        // shutdown(new_fd, SHUT_RDWR);
-        // close(new_fd);
     }
 }
