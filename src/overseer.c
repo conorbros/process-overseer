@@ -73,7 +73,7 @@ void print_exec_cmd(command_t *cmd, process_t *proc)
     {
         printf(" %s", cmd->argv[i]);
     }
-    printf("has been executed with pid %d\n", proc->pid);
+    printf(" has been executed with pid %d\n", proc->pid);
     free(output);
 }
 
@@ -152,19 +152,19 @@ pid_t run_process(command_t *cmd, process_t *proc)
     {
         proc = add_process(getpid());
         print_exec_cmd(cmd, proc);
-        if (cmd->argc > 0)
+
+        char *arg_arr[cmd->argc + 1];
+        // First argument is file path
+        arg_arr[0] = cmd->file;
+        for (int i = 1; i < cmd->argc + 1; i++)
         {
-            if (execv(cmd->file, cmd->argv) == -1)
-            {
-                print_exec_cmd_err(cmd);
-            }
+            arg_arr[i] = cmd->argv[i - 1];
         }
-        else
+        // char array must be null terminated
+        arg_arr[cmd->argc + 1] = NULL;
+        if (execv(cmd->file, &arg_arr) == -1)
         {
-            if (execl(cmd->file, "", NULL) == -1)
-            {
-                print_exec_cmd_err(cmd);
-            }
+            print_exec_cmd_err(cmd);
         }
     }
     else
@@ -308,7 +308,7 @@ void recv_cmd_field(int sockfd, char **field)
         perror("recv");
         exit(EXIT_FAILURE);
     }
-    *field = (char *)malloc(len);
+    *field = malloc(len * sizeof(char));
     memcpy(*field, recv_char, len);
 }
 
@@ -316,6 +316,19 @@ void close_sock(int sockfd)
 {
     shutdown(sockfd, SHUT_RDWR);
     close(sockfd);
+}
+
+void free_cmd(command_t *cmd)
+{
+    free(cmd->file);
+    free(cmd->log);
+    free(cmd->out);
+    free(cmd->time);
+    for (int i = 0; i < cmd->argc; i++)
+    {
+        free(cmd->argv[i]);
+    }
+    free(cmd->argv);
 }
 
 void handle_conn(void *arg)
@@ -329,33 +342,32 @@ void handle_conn(void *arg)
     }
     msg_t msg = ntohs(val);
 
-    // Receive command struct
+    // Receive and execute command
     if (msg == cmd_msg_t)
     {
         int recv_val;
         char *file, *log, *out, *time;
-        command_t *cmd = (command_t *)malloc(sizeof(command_t *));
+        command_t *cmd = malloc(sizeof(command_t));
         cmd->argc = 0;
 
         recv_cmd_field(*sockfd, &file);
         cmd->file = strdup(file);
-        // TODO causes double free error
-        // if (*file)
-        //     free(file);
+        if (file)
+            free(file);
 
         recv_cmd_field(*sockfd, &log);
         cmd->log = strdup(log);
-        if (*log)
+        if (log)
             free(log);
 
         recv_cmd_field(*sockfd, &out);
         cmd->out = strdup(out);
-        if (*out)
+        if (out)
             free(out);
 
         recv_cmd_field(*sockfd, &time);
         cmd->time = strdup(time);
-        if (*time)
+        if (time)
             free(time);
 
         if (recv(*sockfd, &recv_val, sizeof(int), PF_UNSPEC) == -1)
@@ -379,7 +391,7 @@ void handle_conn(void *arg)
         close_sock(*sockfd);
 
         exec_cmd(cmd);
-        free(cmd);
+        free_cmd(cmd);
     }
 }
 
