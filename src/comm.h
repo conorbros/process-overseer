@@ -13,6 +13,7 @@ typedef struct command
     char *log;
     char *out;
     char *time;
+    _IO_FILE *log_output;
 } command_t;
 
 void print_cmd(command_t *cmd)

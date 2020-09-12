@@ -68,12 +68,12 @@ void print_exec_cmd(command_t *cmd, process_t *proc)
     int len = strlen(cmd->file) + 26;
     output = (char *)malloc(len);
     sprintf(output, "%s - %s", get_time(), cmd->file);
-    printf("%s", output);
+    fprintf(cmd->log_output, "%s", output);
     for (int i = 0; i < cmd->argc; i++)
     {
-        printf(" %s", cmd->argv[i]);
+        fprintf(cmd->log_output, " %s", cmd->argv[i]);
     }
-    printf(" has been executed with pid %d\n", proc->pid);
+    fprintf(cmd->log_output, " has been executed with pid %d\n", proc->pid);
     free(output);
 }
 
@@ -110,12 +110,12 @@ void print_exec_cmd_attempt(command_t *cmd)
     int len = strlen(cmd->file) + 30 + 26;
     output = (char *)malloc(len);
     sprintf(output, "%s - attempting to execute %s", get_time(), cmd->file);
-    printf("%s", output);
+    fprintf(cmd->log_output, "%s", output);
     for (int i = 0; i < cmd->argc; i++)
     {
-        printf(" %s", cmd->argv[i]);
+        fprintf(cmd->log_output, " %s", cmd->argv[i]);
     }
-    printf("\n");
+    fprintf(cmd->log_output, "\n");
     free(output);
 }
 
@@ -125,18 +125,18 @@ void print_exec_cmd_err(command_t *cmd)
     int len = strlen(cmd->file) + 26 + 26;
     output = (char *)malloc(len);
     sprintf(output, "%s - could not execute %s", get_time(), cmd->file);
-    printf("%s", output);
+    fprintf(cmd->log_output, "%s", output);
     for (int i = 0; i < cmd->argc; i++)
     {
-        printf(" %s", cmd->argv[i]);
+        fprintf(cmd->log_output, " %s", cmd->argv[i]);
     }
-    printf("\n");
+    fprintf(cmd->log_output, "\n");
     free(output);
 }
 
-void print_exec_cmd_exit(pid_t pid, int status)
+void print_exec_cmd_exit(command_t *cmd, pid_t pid, int status)
 {
-    printf("%s - %d has terminated with the exit status code %d\n", get_time(), pid, status);
+    fprintf(cmd->log_output, "%s - %d has terminated with the exit status code %d\n", get_time(), pid, status);
 }
 
 pid_t run_process(command_t *cmd, process_t *proc)
@@ -162,7 +162,8 @@ pid_t run_process(command_t *cmd, process_t *proc)
         }
         // char array must be null terminated
         arg_arr[cmd->argc + 1] = NULL;
-        if (execv(cmd->file, &arg_arr) == -1)
+        //setitimer(ITIMER_VIRTUAL, )
+        if (execv(cmd->file, arg_arr) == -1)
         {
             print_exec_cmd_err(cmd);
         }
@@ -192,7 +193,7 @@ void exec_cmd(command_t *cmd)
         if (WIFEXITED(status))
         {
             int es = WEXITSTATUS(status);
-            print_exec_cmd_exit(ret, es);
+            print_exec_cmd_exit(cmd, ret, es);
         }
     }
 }
@@ -390,7 +391,30 @@ void handle_conn(void *arg)
 
         close_sock(*sockfd);
 
+        if (cmd->log[0] == '\0')
+        {
+            cmd->log_output = stdout;
+        }
+        else
+        {
+            FILE *logfile;
+            logfile = fopen(cmd->log, "w");
+            if (logfile == NULL)
+            {
+                fprintf(stderr, "Logfile error\n");
+                exit(EXIT_FAILURE);
+            }
+            cmd->log_output = logfile;
+        }
+
         exec_cmd(cmd);
+
+        // If process was not printing to stdout close the logfile
+        if (cmd->log_output != stdout)
+        {
+            fclose(cmd->log_output);
+        }
+
         free_cmd(cmd);
     }
 }
