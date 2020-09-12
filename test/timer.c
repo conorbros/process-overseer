@@ -6,16 +6,16 @@
 
 int main(int argc, char *argv[])
 {
-    printf("Starting the timer\n");
-    if (argc < 2)
+    if (argc < 1)
     {
-        printf("Waiting for %d\n", WAIT);
+        printf("Waiting for  default: %d\n", WAIT);
         sleep(WAIT);
     }
     else
     {
+        printf("Starting the timer\n");
         int wait = atoi(argv[1]);
-        printf("Waiting for %d\n", wait);
+        printf("Waiting for custom: %d\n", wait);
         sleep(wait);
     }
 
