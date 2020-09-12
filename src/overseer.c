@@ -62,19 +62,15 @@ char *get_time()
     return buffer;
 }
 
-void print_exec_cmd(command_t *cmd, process_t *proc)
+void print_exec_cmd(command_t *cmd, pid_t pid)
 {
-    char *output;
-    int len = strlen(cmd->file) + 26;
-    output = (char *)malloc(len);
-    sprintf(output, "%s - %s", get_time(), cmd->file);
-    fprintf(cmd->log_output, "%s", output);
+    fprintf(cmd->log_output, "%s - %s", get_time(), cmd->file);
     for (int i = 0; i < cmd->argc; i++)
     {
         fprintf(cmd->log_output, " %s", cmd->argv[i]);
     }
-    fprintf(cmd->log_output, " has been executed with pid %d\n", proc->pid);
-    free(output);
+    fprintf(cmd->log_output, " has been executed with pid %d", pid);
+    fprintf(cmd->log_output, "\n");
 }
 
 process_t *add_process(pid_t pid)
@@ -106,32 +102,22 @@ process_t *add_process(pid_t pid)
 
 void print_exec_cmd_attempt(command_t *cmd)
 {
-    char *output;
-    int len = strlen(cmd->file) + 30 + 26;
-    output = (char *)malloc(len);
-    sprintf(output, "%s - attempting to execute %s", get_time(), cmd->file);
-    fprintf(cmd->log_output, "%s", output);
+    fprintf(cmd->log_output, "%s - attempting to execute %s", get_time(), cmd->file);
     for (int i = 0; i < cmd->argc; i++)
     {
         fprintf(cmd->log_output, " %s", cmd->argv[i]);
     }
     fprintf(cmd->log_output, "\n");
-    free(output);
 }
 
 void print_exec_cmd_err(command_t *cmd)
 {
-    char *output;
-    int len = strlen(cmd->file) + 26 + 26;
-    output = (char *)malloc(len);
-    sprintf(output, "%s - could not execute %s", get_time(), cmd->file);
-    fprintf(cmd->log_output, "%s", output);
+    fprintf(cmd->log_output, "%s - could not execute %s", get_time(), cmd->file);
     for (int i = 0; i < cmd->argc; i++)
     {
         fprintf(cmd->log_output, " %s", cmd->argv[i]);
     }
     fprintf(cmd->log_output, "\n");
-    free(output);
 }
 
 void print_exec_cmd_exit(command_t *cmd, pid_t pid, int status)
