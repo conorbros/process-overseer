@@ -137,6 +137,12 @@ int main(int argc, char *argv[])
         exit(EXIT_FAILURE);
     }
 
+    if (strcmp(argv[1], "--help") == 0)
+    {
+        print_usage();
+        exit(EXIT_SUCCESS);
+    }
+
     command_t *cmd = malloc(sizeof(command_t));
     get_cmd_args(argc, argv, cmd);
 
