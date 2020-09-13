@@ -13,12 +13,6 @@
 #include <ctype.h>
 #include "comm.h"
 
-#define MAXDATASIZE 100 /* max number of bytes we can get at once */
-
-#define ARRAY_SIZE 30
-
-#define RETURNED_ERROR -1
-
 void print_usage()
 {
     fprintf(stderr, "Usage: controller <address> <port> {[-o out_file] [-log log_file] [-t seconds] <file> [arg...] | mem [pid] | memkill <percent>}\n");
