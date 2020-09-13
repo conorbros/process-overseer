@@ -1,23 +1,20 @@
-#define _GNU_SOURCE
-#include <stdio.h>   /* standard I/O routines                     */
-#include <pthread.h> /* pthread functions and data structures     */
-#include <stdlib.h>  /* rand() and srand() functions              */
+#include <stdio.h>
+#include <pthread.h>
+#include <stdlib.h>
 #include <time.h>
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <errno.h>
 #include <string.h>
 #include <sys/time.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 #include <sys/types.h>
 #include <netinet/in.h>
 #include <sys/wait.h>
-#include <pthread.h>
-#include <arpa/inet.h>
 #include <math.h>
-#include <pthread.h>
 #include <signal.h>
 #include <stdbool.h>
-#include <string.h>
 #include "comm.h"
 
 #define NUM_HANDLER_THREADS 5
@@ -130,7 +127,7 @@ pid_t run_process(command_t *cmd)
 
     // Using stdout
     bool redirect;
-    FILE *outfile;
+    int outfile_fd;
 
     if (cmd->out[0] == '\0')
     {
@@ -139,8 +136,8 @@ pid_t run_process(command_t *cmd)
     else
     {
         redirect = true;
-        outfile = fopen(cmd->out, "a+");
-        if (outfile == NULL)
+        outfile_fd = open(cmd->out, O_APPEND);
+        if (outfile_fd == -1)
         {
             fprintf(stderr, "Outfile error\n");
             exit(EXIT_FAILURE);
@@ -157,8 +154,8 @@ pid_t run_process(command_t *cmd)
     {
         if (redirect)
         {
-            dup2(fileno(outfile), STDOUT_FILENO);
-            dup2(fileno(outfile), STDERR_FILENO);
+            dup2(outfile_fd, STDOUT_FILENO);
+            dup2(outfile_fd, STDERR_FILENO);
         }
 
         char *arg_arr[cmd->argc + 1];
