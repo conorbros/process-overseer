@@ -125,7 +125,7 @@ void print_exec_cmd_exit(command_t *cmd, pid_t pid, int status)
     fprintf(cmd->log_output, "%s - %d has terminated with the exit status code %d\n", get_time(), pid, status);
 }
 
-pid_t run_process(command_t *cmd, process_t *proc)
+pid_t run_process(command_t *cmd)
 {
 
     pid_t pid = fork();
@@ -136,9 +136,6 @@ pid_t run_process(command_t *cmd, process_t *proc)
     }
     else if (pid == 0)
     {
-        proc = add_process(getpid());
-        print_exec_cmd(cmd, proc);
-
         char *arg_arr[cmd->argc + 1];
         // First argument is file path
         arg_arr[0] = cmd->file;
@@ -164,23 +161,20 @@ pid_t run_process(command_t *cmd, process_t *proc)
 void exec_cmd(command_t *cmd)
 {
     print_exec_cmd_attempt(cmd);
-    process_t *proc;
-    pid_t ret = run_process(cmd, proc);
-    if (ret > 0)
+    pid_t ret = run_process(cmd);
+    print_exec_cmd(cmd, ret);
+
+    int status;
+    if (waitpid(ret, &status, 0) == -1)
     {
-        int status;
+        perror("waitpid");
+        exit(EXIT_FAILURE);
+    }
 
-        if (waitpid(ret, &status, 0) == -1)
-        {
-            perror("waitpid");
-            exit(EXIT_FAILURE);
-        }
-
-        if (WIFEXITED(status))
-        {
-            int es = WEXITSTATUS(status);
-            print_exec_cmd_exit(cmd, ret, es);
-        }
+    if (WIFEXITED(status))
+    {
+        int es = WEXITSTATUS(status);
+        print_exec_cmd_exit(cmd, ret, es);
     }
 }
 
@@ -384,7 +378,7 @@ void handle_conn(void *arg)
         else
         {
             FILE *logfile;
-            logfile = fopen(cmd->log, "w");
+            logfile = fopen(cmd->log, "a");
             if (logfile == NULL)
             {
                 fprintf(stderr, "Logfile error\n");
