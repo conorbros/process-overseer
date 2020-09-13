@@ -10,6 +10,8 @@
 #include <sys/types.h>
 #include <netinet/in.h>
 #include <sys/wait.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 #include <pthread.h>
 #include <arpa/inet.h>
 #include <math.h>
@@ -127,6 +129,25 @@ void print_exec_cmd_exit(command_t *cmd, pid_t pid, int status)
 
 pid_t run_process(command_t *cmd)
 {
+    // Using stdout
+    bool redirect;
+    FILE *out_file;
+
+    if (cmd->out[0] == '\0')
+    {
+        redirect = false;
+    }
+    else
+    {
+        redirect = true;
+        out_file = fopen(cmd->out, "a+");
+        if (out_file == NULL)
+        {
+            perror("open");
+            fprintf(stderr, "Outfile error\n");
+            exit(EXIT_FAILURE);
+        }
+    }
 
     pid_t pid = fork();
     if (pid < 0)
@@ -136,6 +157,12 @@ pid_t run_process(command_t *cmd)
     }
     else if (pid == 0)
     {
+        if (redirect)
+        {
+            dup2(fileno(out_file), STDOUT_FILENO);
+            dup2(fileno(out_file), STDERR_FILENO);
+        }
+
         char *arg_arr[cmd->argc + 1];
         // First argument is file path
         arg_arr[0] = cmd->file;
