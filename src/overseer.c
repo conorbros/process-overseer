@@ -127,6 +127,18 @@ void print_exec_cmd_exit(command_t *cmd, pid_t pid, int status)
     fprintf(cmd->log_output, "%s - %d has terminated with the exit status code %d\n", get_time(), pid, status);
 }
 
+void print_exec_cmd_sent_signal(command_t *cmd, pid_t pid, int sig)
+{
+    if (sig == SIGTERM)
+    {
+        fprintf(cmd->log_output, "%s - sent SIGTERM to %d\n", get_time(), pid);
+    }
+    else if (sig == SIGKILL)
+    {
+        fprintf(cmd->log_output, "%s - sent SIGKILL to %d\n", get_time(), pid);
+    }
+}
+
 pid_t run_process(command_t *cmd)
 {
     // Using stdout
@@ -172,7 +184,7 @@ pid_t run_process(command_t *cmd)
         }
         // char array must be null terminated
         arg_arr[cmd->argc + 1] = NULL;
-        //setitimer(ITIMER_VIRTUAL, )
+
         if (execv(cmd->file, arg_arr) == -1)
         {
             print_exec_cmd_err(cmd);
@@ -187,18 +199,71 @@ pid_t run_process(command_t *cmd)
 
 void exec_cmd(command_t *cmd)
 {
+    int status;
+    int result;
+    int term_pipe[2];
+
+    struct timeval timeout;
+    if (cmd->time[0] == '\0')
+        timeout.tv_sec = 10;
+    else
+        timeout.tv_sec = atoi(cmd->time);
+    timeout.tv_usec = 0;
+
+    pipe(term_pipe);
+
     print_exec_cmd_attempt(cmd);
     pid_t ret = run_process(cmd);
     print_exec_cmd(cmd, ret);
 
-    int status;
-    if (waitpid(ret, &status, 0) == -1)
+    close(term_pipe[1]);
+
+    fd_set read_fds;
+
+    FD_ZERO(&read_fds);
+    FD_SET(term_pipe[0], &read_fds);
+    result = select(term_pipe[0] + 1, &read_fds, NULL, NULL, &timeout);
+
+    bool ended_manually = false;
+
+    // Has timed out, must end manually
+    if (result == 0)
     {
-        perror("waitpid");
-        exit(EXIT_FAILURE);
+        kill(ret, SIGTERM);
+        print_exec_cmd_sent_signal(cmd, ret, SIGTERM);
+
+        int wait = 5000;
+
+        // a current time of milliseconds
+        int start = clock() * 1000 / CLOCKS_PER_SEC;
+
+        // needed count milliseconds of return from this timeout
+        int end = start + wait;
+        do
+        {
+            start = clock() * 1000 / CLOCKS_PER_SEC;
+        } while (kill(ret, 0) == 0 && start <= end);
+
+        // If the process is still running 5 seconds after sending SIGTERM, must kill
+        if (waitpid(ret, &status, WNOHANG) == 0)
+        {
+            kill(ret, SIGKILL);
+            print_exec_cmd_sent_signal(cmd, ret, SIGKILL);
+        }
+        ended_manually = true;
     }
 
-    if (WIFEXITED(status))
+    close(term_pipe[0]);
+
+    if (!ended_manually)
+    {
+        if (waitpid(ret, &status, 0) == -1)
+        {
+            perror("waitpid");
+        }
+    }
+
+    if (WIFEXITED(status) || WIFSIGNALED(status))
     {
         int es = WEXITSTATUS(status);
         print_exec_cmd_exit(cmd, ret, es);
