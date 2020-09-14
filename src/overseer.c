@@ -24,16 +24,6 @@
 #define NUM_HANDLER_THREADS 5
 #define BACKLOG 10
 
-pthread_mutex_t request_mutex;
-pthread_mutex_t quit_mutex;
-
-pthread_mutex_t process_mutex;
-
-pthread_cond_t got_request;
-
-int num_requests = 0;
-int quit = 0;
-
 struct request
 {
     void (*func)(void *);
@@ -48,10 +38,23 @@ typedef struct process
     struct process *next;
 } process_t;
 
+int sockfd;
+
+pthread_mutex_t request_mutex;
+pthread_mutex_t quit_mutex;
+
+pthread_mutex_t process_mutex;
+
+pthread_cond_t got_request;
+
 process_t *processes = NULL;
+process_t *last_process = NULL;
+int num_processes = 0;
 
 struct request *requests = NULL;
 struct request *last_request = NULL;
+int num_requests = 0;
+int quit = 0;
 
 char *get_time()
 {
@@ -75,6 +78,30 @@ void print_exec_cmd(command_t *cmd, pid_t pid)
     fprintf(cmd->log_output, "\n");
 }
 
+void print_proc_list(process_t *proc)
+{
+    process_t *current = proc;
+    while (current != NULL)
+    {
+        printf("pid: %d --> ", current->pid);
+        current = current->next;
+    }
+    printf("\n");
+}
+
+void kill_all_procs(process_t *proc)
+{
+    process_t *current = proc;
+    process_t *tmp;
+    while (current != NULL)
+    {
+        kill(current->pid, SIGKILL);
+        tmp = current;
+        current = current->next;
+        free(tmp);
+    }
+}
+
 process_t *add_process(pid_t pid)
 {
     process_t *new_process;
@@ -89,16 +116,19 @@ process_t *add_process(pid_t pid)
     new_process->next = NULL;
 
     pthread_mutex_lock(&process_mutex);
-    if (processes == NULL)
+
+    if (num_processes == 0)
     {
         processes = new_process;
-        new_process->next = NULL;
+        last_process = new_process;
     }
     else
     {
-        new_process->next = processes;
-        processes = new_process;
+        last_process->next = new_process;
+        last_process = new_process;
     }
+    num_processes++;
+    pthread_mutex_unlock(&process_mutex);
     return new_process;
 }
 
@@ -216,6 +246,8 @@ void exec_cmd(command_t *cmd)
     pid_t ret = run_process(cmd);
     print_exec_cmd(cmd, ret);
 
+    add_process(ret);
+
     close(term_pipe[1]);
 
     fd_set read_fds;
@@ -229,6 +261,7 @@ void exec_cmd(command_t *cmd)
     // Has timed out, must end manually
     if (result == 0)
     {
+
         kill(ret, SIGTERM);
         print_exec_cmd_sent_signal(cmd, ret, SIGTERM);
 
@@ -365,10 +398,10 @@ void *handle_requests_loop()
     return NULL;
 }
 
-void recv_cmd_field(int sockfd, char **field)
+void recv_cmd_field(int conn_sockfd, char **field)
 {
     int recv_len;
-    if (recv(sockfd, &recv_len, sizeof(int), PF_UNSPEC) == -1)
+    if (recv(conn_sockfd, &recv_len, sizeof(int), PF_UNSPEC) == -1)
     {
         perror("recv");
         exit(EXIT_FAILURE);
@@ -376,7 +409,7 @@ void recv_cmd_field(int sockfd, char **field)
     int len = ntohs(recv_len);
 
     char recv_char[len];
-    if (recv(sockfd, &recv_char, sizeof(char) * len, PF_UNSPEC) == -1)
+    if (recv(conn_sockfd, &recv_char, sizeof(char) * len, PF_UNSPEC) == -1)
     {
         perror("recv");
         exit(EXIT_FAILURE);
@@ -385,10 +418,10 @@ void recv_cmd_field(int sockfd, char **field)
     memcpy(*field, recv_char, len);
 }
 
-void close_sock(int sockfd)
+void close_sock(int conn_sockfd)
 {
-    shutdown(sockfd, SHUT_RDWR);
-    close(sockfd);
+    shutdown(conn_sockfd, SHUT_RDWR);
+    close(conn_sockfd);
 }
 
 void free_cmd(command_t *cmd)
@@ -402,13 +435,14 @@ void free_cmd(command_t *cmd)
         free(cmd->argv[i]);
     }
     free(cmd->argv);
+    free(cmd);
 }
 
 void handle_conn(void *arg)
 {
     int val;
-    int *sockfd = arg;
-    if (recv(*sockfd, &val, sizeof(int), PF_UNSPEC) == -1)
+    int *conn_sockfd = arg;
+    if (recv(*conn_sockfd, &val, sizeof(int), PF_UNSPEC) == -1)
     {
         perror("recv");
         exit(EXIT_FAILURE);
@@ -423,27 +457,27 @@ void handle_conn(void *arg)
         command_t *cmd = malloc(sizeof(command_t));
         cmd->argc = 0;
 
-        recv_cmd_field(*sockfd, &file);
+        recv_cmd_field(*conn_sockfd, &file);
         cmd->file = strdup(file);
         if (file)
             free(file);
 
-        recv_cmd_field(*sockfd, &log);
+        recv_cmd_field(*conn_sockfd, &log);
         cmd->log = strdup(log);
         if (log)
             free(log);
 
-        recv_cmd_field(*sockfd, &out);
+        recv_cmd_field(*conn_sockfd, &out);
         cmd->out = strdup(out);
         if (out)
             free(out);
 
-        recv_cmd_field(*sockfd, &time);
+        recv_cmd_field(*conn_sockfd, &time);
         cmd->time = strdup(time);
         if (time)
             free(time);
 
-        if (recv(*sockfd, &recv_val, sizeof(int), PF_UNSPEC) == -1)
+        if (recv(*conn_sockfd, &recv_val, sizeof(int), PF_UNSPEC) == -1)
         {
             perror("recv");
             exit(EXIT_FAILURE);
@@ -457,11 +491,11 @@ void handle_conn(void *arg)
         {
             for (int i = 0; i < cmd->argc; i++)
             {
-                recv_cmd_field(*sockfd, &cmd->argv[i]);
+                recv_cmd_field(*conn_sockfd, &cmd->argv[i]);
             }
         }
 
-        close_sock(*sockfd);
+        close_sock(*conn_sockfd);
 
         if (cmd->log[0] == '\0')
         {
@@ -491,17 +525,25 @@ void handle_conn(void *arg)
     }
 }
 
+void interrupt_handler()
+{
+    kill_all_procs(processes);
+    close_sock(sockfd);
+    exit(EXIT_SUCCESS);
+}
+
 int main(int argc, char *argv[])
 {
     int i;
     int thr_id[NUM_HANDLER_THREADS];
     pthread_t p_threads[NUM_HANDLER_THREADS];
-    int sockfd;
     int new_fd;
     struct sockaddr_in my_addr;
     struct sockaddr_in their_addr;
     socklen_t sin_size;
     int port;
+
+    signal(SIGINT, interrupt_handler);
 
     if (argc < 2)
     {
