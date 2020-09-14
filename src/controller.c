@@ -123,6 +123,12 @@ void send_cmd_args(int sockfd, command_t *cmd)
     }
 }
 
+void free_cmd(command_t *cmd)
+{
+    free(cmd->argv);
+    free(cmd);
+}
+
 int main(int argc, char *argv[])
 {
     int sockfd;
@@ -211,6 +217,8 @@ int main(int argc, char *argv[])
     send_cmd_args(sockfd, cmd);
 
     close(sockfd);
+
+    free_cmd(cmd);
 
     return 0;
 }
