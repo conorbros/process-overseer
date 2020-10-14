@@ -1,25 +1,13 @@
 CXX       	:= gcc
-FLAGS		:= -Wall -Wextra -Werror -Wshadow -Wdouble-promotion -Wpedantic -pthread -g
-#FLAGS		:= -Wall -Wextra -Wshadow -Wdouble-promotion -Wpedantic -pthread -g -fsanitize=address
-# FLAGS		:= -Wall -Wextra -Wshadow -Wdouble-promotion -Wpedantic -pthread -g -fsanitize=thread -O1
-INCLUDE := include
+FLAGS		:= -pthread -g
 
-BIN := build
-SRC := src
+all: overseer controller
 
-all: overseer controller timer timer2
+overseer: ./overseer.c ./proc_map.c ./log.c ./thread_pool.c
+	$(CXX) $(FLAGS) -o ./overseer ./overseer.c ./proc_map.c ./log.c ./thread_pool.c
 
-overseer: ./src/overseer.c ./src/proc_map.c ./src/log.c ./src/thread_pool.c
-	$(CXX) $(FLAGS) -I$(INCLUDE) -o ./$(BIN)/overseer ./$(SRC)/overseer.c ./$(SRC)/proc_map.c ./src/log.c ./src/thread_pool.c
-
-controller: ./src/controller.c
-	$(CXX) $(FLAGS) -I$(INCLUDE) -o ./$(BIN)/controller ./$(SRC)/controller.c
-
-timer: ./test/timer.c
-	$(CXX) $(FLAGS) -I$(INCLUDE) -o ./build/timer ./test/timer.c
-
-timer2: ./test/timer2.c
-	$(CXX) $(FLAGS) -o ./build/timer2 ./test/timer2.c
+controller: ./controller.c
+	$(CXX) $(FLAGS) -o ./controller ./controller.c
 
 clean:
-	-rm $(BIN)/*
+	-rm controller overseer
