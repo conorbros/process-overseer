@@ -5,19 +5,22 @@
 
 #define WAIT 1
 
-int term_wait;
-
 void termination_handler()
 {
     printf("Received termination signal...exiting\n");
-    sleep(term_wait);
+    sleep(3);
     exit(SIGTERM);
 }
 
 int main(int argc, char *argv[])
 {
-    term_wait = atoi(argv[2]);
     signal(SIGTERM, termination_handler);
+    for (int i = 1; i < argc; i++)
+    {
+        printf("%s ", argv[i]);
+    }
+    printf("\n");
+
     if (argc < 1)
     {
         printf("Waiting for  default: %d\n", WAIT);
@@ -32,5 +35,5 @@ int main(int argc, char *argv[])
     }
 
     printf("Finished\n");
-    return 0;
+    return 2;
 }

@@ -1,176 +1,177 @@
 #define _GNU_SOURCE
-#include <stdio.h>   /* standard I/O routines                     */
-#include <pthread.h> /* pthread functions and data structures     */
-#include <stdlib.h>  /* rand() and srand() functions              */
+#include <stdio.h>
+#include <stdlib.h>
 #include <time.h>
 #include <unistd.h>
 #include <arpa/inet.h>
-#include <errno.h>
-#include <string.h>
 #include <sys/types.h>
 #include <netinet/in.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
+#include <sys/sysinfo.h>
 #include <fcntl.h>
-#include <pthread.h>
-#include <arpa/inet.h>
-#include <math.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <string.h>
 #include "comm.h"
+#include "proc_map.h"
+#include "log.h"
+#include "proc.h"
+#include "thread_pool.h"
 
-#define NUM_HANDLER_THREADS 5
 #define BACKLOG 10
+#define COMMAND_NOT_RUNNABLE 127
+#define KILL_WAIT 5
+#define TERM_WAIT 10
 
-struct request
-{
-    void (*func)(void *);
-    void *data;
-    struct request *next;
-};
+int quitting = 0;
 
-typedef struct process
-{
-    pid_t pid;
-    char time[26];
-    struct process *next;
-} process_t;
+/**
+ * @brief same function as asprintf but without leaking memory
+ * 
+ */
+#define sasprintf(write_to, ...)                \
+    {                                           \
+        char *tmp_string_for_extend = write_to; \
+        asprintf(&(write_to), __VA_ARGS__);     \
+        free(tmp_string_for_extend);            \
+    }
 
 int sockfd;
 
-pthread_mutex_t request_mutex;
-pthread_mutex_t quit_mutex;
+pthread_mutex_t proc_mutex = PTHREAD_ERRORCHECK_MUTEX_INITIALIZER_NP;
+proc_entry_t *procs = NULL;
+proc_entry_t *last_proc = NULL;
+int num_procs = 0;
 
-pthread_mutex_t process_mutex;
-
-pthread_cond_t got_request;
-
-process_t *processes = NULL;
-process_t *last_process = NULL;
-int num_processes = 0;
-
-struct request *requests = NULL;
-struct request *last_request = NULL;
-int num_requests = 0;
-int quit = 0;
-
-char *get_time()
+void lock_proc_mutex()
 {
-    time_t timer;
-    static char buffer[26];
-    struct tm *tm_info;
-    timer = time(NULL);
-    tm_info = localtime(&timer);
-    strftime(buffer, 26, "%Y-%m-%d %H:%M:%S", tm_info);
-    return buffer;
-}
-
-void print_exec_cmd(command_t *cmd, pid_t pid)
-{
-    fprintf(cmd->log_output, "%s - %s", get_time(), cmd->file);
-    for (int i = 0; i < cmd->argc; i++)
+    if (pthread_mutex_lock(&proc_mutex) != 0)
     {
-        fprintf(cmd->log_output, " %s", cmd->argv[i]);
-    }
-    fprintf(cmd->log_output, " has been executed with pid %d", pid);
-    fprintf(cmd->log_output, "\n");
-}
-
-void print_proc_list(process_t *proc)
-{
-    process_t *current = proc;
-    while (current != NULL)
-    {
-        printf("pid: %d --> ", current->pid);
-        current = current->next;
-    }
-    printf("\n");
-}
-
-void kill_all_procs(process_t *proc)
-{
-    process_t *current = proc;
-    process_t *tmp;
-    while (current != NULL)
-    {
-        kill(current->pid, SIGKILL);
-        tmp = current;
-        current = current->next;
-        free(tmp);
-    }
-}
-
-process_t *add_process(pid_t pid)
-{
-    process_t *new_process;
-    new_process = (process_t *)malloc(sizeof(process_t));
-    if (!new_process)
-    {
-        fprintf(stderr, "add_process: out of memory\n");
+        perror("pthread_mutex_lock");
         exit(EXIT_FAILURE);
     }
-    new_process->pid = pid;
-    strcpy(new_process->time, get_time());
-    new_process->next = NULL;
+}
 
-    pthread_mutex_lock(&process_mutex);
-
-    if (num_processes == 0)
+void unlock_proc_mutex()
+{
+    if (pthread_mutex_unlock(&proc_mutex) != 0)
     {
-        processes = new_process;
-        last_process = new_process;
+        perror("pthread_mutex_unlock");
+        exit(EXIT_FAILURE);
     }
+}
+
+/**
+ * @brief Kills all currently running processes
+ * 
+ */
+void kill_all_procs()
+{
+    pid_t pids[NUM_HANDLER_THREADS];
+    int pids_n = 0;
+    lock_proc_mutex();
+    proc_entry_t *curr = procs;
+    while (curr != NULL)
+    {
+        if (!pid_in_arr(curr->pid, pids, pids_n))
+        {
+            kill(curr->pid, SIGKILL);
+            pids[pids_n] = curr->pid;
+            pids_n++;
+        }
+        curr = curr->next;
+    }
+    unlock_proc_mutex();
+}
+
+/**
+ * @brief Removes all procs with a pid matching the supplied one from the linked list
+ * 
+ * @param pid 
+ */
+void remove_proc(pid_t pid)
+{
+    proc_entry_t *prev = NULL;
+    lock_proc_mutex();
+    proc_entry_t *tmp = procs;
+    while (tmp != NULL && tmp->pid == pid)
+    {
+        procs = tmp->next;
+        free(tmp);
+        tmp = procs;
+    }
+
+    while (tmp != NULL)
+    {
+        while (tmp != NULL && tmp->pid != pid)
+        {
+            prev = tmp;
+            tmp = tmp->next;
+        }
+
+        if (tmp == NULL)
+            break;
+
+        prev->next = tmp->next;
+        free(tmp);
+        tmp = prev->next;
+    }
+    unlock_proc_mutex();
+}
+
+/**
+ * @brief Adds a memory entry record to the linked list
+ * 
+ * @param pid 
+ * @param bytes 
+ * @param cmd 
+ * @return proc_entry_t* 
+ */
+proc_entry_t *add_proc_mem_entry(pid_t pid, int bytes, command_t *cmd)
+{
+    proc_entry_t *new_proc = NULL;
+    new_proc = (proc_entry_t *)malloc(sizeof(proc_entry_t));
+    if (!new_proc)
+    {
+        fprintf(stderr, "add_proc_mem_entry: out of memory\n");
+        exit(EXIT_FAILURE);
+    }
+
+    new_proc->pid = pid;
+    char time[TIME_LEN];
+    get_time(time);
+    strcpy(new_proc->time, time);
+    new_proc->bytes = bytes;
+    new_proc->cmd = cmd;
+    new_proc->next = NULL;
+
+    lock_proc_mutex();
+
+    new_proc->next = procs;
+    procs = new_proc;
+
+    unlock_proc_mutex();
+    return new_proc;
+}
+
+void exec_cmd(command_t *cmd)
+{
+    bool end_manually = false;
+    int status;
+    time_t start, end;
+    double elapsed;
+
+    int term_wait;
+
+    if (cmd->time[0] == '\0')
+        term_wait = TERM_WAIT;
     else
-    {
-        last_process->next = new_process;
-        last_process = new_process;
-    }
-    num_processes++;
-    pthread_mutex_unlock(&process_mutex);
-    return new_process;
-}
+        term_wait = atoi(cmd->time);
 
-void print_exec_cmd_attempt(command_t *cmd)
-{
-    fprintf(cmd->log_output, "%s - attempting to execute %s", get_time(), cmd->file);
-    for (int i = 0; i < cmd->argc; i++)
-    {
-        fprintf(cmd->log_output, " %s", cmd->argv[i]);
-    }
-    fprintf(cmd->log_output, "\n");
-}
+    print_exec_cmd_attempt(cmd);
 
-void print_exec_cmd_err(command_t *cmd)
-{
-    fprintf(cmd->log_output, "%s - could not execute %s", get_time(), cmd->file);
-    for (int i = 0; i < cmd->argc; i++)
-    {
-        fprintf(cmd->log_output, " %s", cmd->argv[i]);
-    }
-    fprintf(cmd->log_output, "\n");
-}
-
-void print_exec_cmd_exit(command_t *cmd, pid_t pid, int status)
-{
-    fprintf(cmd->log_output, "%s - %d has terminated with the exit status code %d\n", get_time(), pid, status);
-}
-
-void print_exec_cmd_sent_signal(command_t *cmd, pid_t pid, int sig)
-{
-    if (sig == SIGTERM)
-    {
-        fprintf(cmd->log_output, "%s - sent SIGTERM to %d\n", get_time(), pid);
-    }
-    else if (sig == SIGKILL)
-    {
-        fprintf(cmd->log_output, "%s - sent SIGKILL to %d\n", get_time(), pid);
-    }
-}
-
-pid_t run_process(command_t *cmd)
-{
     // Using stdout
     bool redirect;
     FILE *out_file;
@@ -191,13 +192,23 @@ pid_t run_process(command_t *cmd)
         }
     }
 
-    pid_t pid = fork();
-    if (pid < 0)
+    char *arg_arr[cmd->argc + 1];
+    // First argument is file path
+    arg_arr[0] = cmd->file;
+    for (int i = 1; i < cmd->argc + 1; i++)
+    {
+        arg_arr[i] = cmd->argv[i - 1];
+    }
+    // null terminate char array
+    arg_arr[cmd->argc + 1] = NULL;
+
+    pid_t ret = fork();
+    if (ret < 0)
     {
         fprintf(stderr, "fork() failed\n");
         exit(EXIT_FAILURE);
     }
-    else if (pid == 0)
+    else if (ret == 0)
     {
         if (redirect)
         {
@@ -205,77 +216,49 @@ pid_t run_process(command_t *cmd)
             dup2(fileno(out_file), STDERR_FILENO);
         }
 
-        char *arg_arr[cmd->argc + 1];
-        // First argument is file path
-        arg_arr[0] = cmd->file;
-        for (int i = 1; i < cmd->argc + 1; i++)
-        {
-            arg_arr[i] = cmd->argv[i - 1];
-        }
-        // char array must be null terminated
-        arg_arr[cmd->argc + 1] = NULL;
-
         if (execv(cmd->file, arg_arr) == -1)
         {
-            print_exec_cmd_err(cmd);
+            exit(COMMAND_NOT_RUNNABLE);
         }
     }
-    else
+
+    // Sleep to let the child process have time to start
+    sleep(1);
+    start = time(NULL);
+    bool started = true;
+    while (waitpid(ret, &status, WNOHANG) == 0)
     {
-        return pid;
+        if (started)
+        {
+            print_exec_cmd(cmd, ret);
+            started = false;
+        }
+        end = time(NULL);
+        elapsed = difftime(end, start);
+        if (elapsed > term_wait)
+        {
+            end_manually = true;
+            break;
+        }
+        sleep(1);
+        int bytes = get_bytes_proc_using(ret);
+        add_proc_mem_entry(ret, bytes, cmd);
     }
-    return getpid();
-}
-
-void exec_cmd(command_t *cmd)
-{
-    int status;
-    int result;
-    int term_pipe[2];
-
-    struct timeval timeout;
-    if (cmd->time[0] == '\0')
-        timeout.tv_sec = 10;
-    else
-        timeout.tv_sec = atoi(cmd->time);
-    timeout.tv_usec = 0;
-
-    pipe(term_pipe);
-
-    print_exec_cmd_attempt(cmd);
-    pid_t ret = run_process(cmd);
-    print_exec_cmd(cmd, ret);
-
-    add_process(ret);
-
-    close(term_pipe[1]);
-
-    fd_set read_fds;
-
-    FD_ZERO(&read_fds);
-    FD_SET(term_pipe[0], &read_fds);
-    result = select(term_pipe[0] + 1, &read_fds, NULL, NULL, &timeout);
-
-    bool ended_manually = false;
+    remove_proc(ret);
 
     // Has timed out, must end manually
-    if (result == 0)
+    if (end_manually)
     {
-
         kill(ret, SIGTERM);
         print_exec_cmd_sent_signal(cmd, ret, SIGTERM);
 
-        int wait = 5000;
-
-        // a current time of milliseconds
-        int start = clock() * 1000 / CLOCKS_PER_SEC;
-
-        // needed count milliseconds of return from this timeout
-        int end = start + wait;
+        start = time(NULL);
         do
         {
-            start = clock() * 1000 / CLOCKS_PER_SEC;
-        } while (kill(ret, 0) == 0 && start <= end);
+            end = time(NULL);
+            elapsed = difftime(end, start);
+            sleep(1);
+        } while (kill(ret, 0) == 0 && elapsed < KILL_WAIT);
 
         // If the process is still running 5 seconds after sending SIGTERM, must kill
         if (waitpid(ret, &status, WNOHANG) == 0)
@@ -283,121 +266,36 @@ void exec_cmd(command_t *cmd)
             kill(ret, SIGKILL);
             print_exec_cmd_sent_signal(cmd, ret, SIGKILL);
         }
-        ended_manually = true;
     }
 
-    close(term_pipe[0]);
-
-    if (!ended_manually)
-    {
-        if (waitpid(ret, &status, 0) == -1)
-        {
-            perror("waitpid");
-        }
-    }
-
-    if (WIFEXITED(status) || WIFSIGNALED(status))
+    if ((WIFEXITED(status) || WIFSIGNALED(status)) && !quitting)
     {
         int es = WEXITSTATUS(status);
-        print_exec_cmd_exit(cmd, ret, es);
-    }
-}
-
-void add_request(void (*func)(void *), void *data)
-{
-    struct request *a_request;
-    a_request = (struct request *)malloc(sizeof(struct request));
-
-    if (!a_request)
-    {
-        fprintf(stderr, "add_request: out of memory\n");
-        exit(EXIT_FAILURE);
-    }
-    a_request->func = func;
-    a_request->data = data;
-    a_request->next = NULL;
-
-    pthread_mutex_lock(&request_mutex);
-
-    if (num_requests == 0)
-    {
-        requests = a_request;
-        last_request = a_request;
-    }
-    else
-    {
-        last_request->next = a_request;
-        last_request = a_request;
-    }
-
-    num_requests++;
-    pthread_mutex_unlock(&request_mutex);
-    pthread_cond_signal(&got_request);
-}
-
-struct request *get_request()
-{
-    struct request *a_request;
-    if (num_requests > 0)
-    {
-        a_request = requests;
-        requests = a_request->next;
-        if (requests == NULL)
+        if (es != COMMAND_NOT_RUNNABLE)
         {
-            last_request = NULL;
-        }
-        num_requests--;
-    }
-    else
-    {
-        a_request = NULL;
-    }
-
-    return a_request;
-}
-
-void handle_request(struct request *a_request)
-{
-    a_request->func(a_request->data);
-}
-
-void *handle_requests_loop()
-{
-    struct request *a_request; /* pointer to a request.               */
-    // int thread_id = *((int *)data); /* thread identifying number           */
-
-    /* lock the mutex, to access the requests list exclusively. */
-    pthread_mutex_lock(&request_mutex);
-
-    /* while still running.... */
-    int running = 1;
-    while (running)
-    {
-        if (num_requests > 0)
-        { /* a request is pending */
-            a_request = get_request();
-            if (a_request)
-            {
-                pthread_mutex_unlock(&request_mutex);
-                handle_request(a_request);
-                free(a_request);
-                pthread_mutex_lock(&request_mutex);
-            }
+            print_exec_cmd_exit(cmd, ret, es);
         }
         else
         {
-            pthread_cond_wait(&got_request, &request_mutex);
+            print_exec_cmd_err(cmd);
         }
-
-        pthread_mutex_lock(&quit_mutex);
-        if (quit)
-            running = 0;
-        pthread_mutex_unlock(&quit_mutex);
     }
-    pthread_mutex_unlock(&request_mutex);
-    return NULL;
+    if (redirect)
+    {
+        if (fclose(out_file) == -1)
+        {
+            perror("fclose");
+            exit(EXIT_FAILURE);
+        }
+    }
 }
 
+/**
+ * @brief Receives a command field from the controller
+ * 
+ * @param conn_sockfd 
+ * @param field 
+ */
 void recv_cmd_field(int conn_sockfd, char **field)
 {
     int recv_len;
@@ -406,7 +304,7 @@ void recv_cmd_field(int conn_sockfd, char **field)
         perror("recv");
         exit(EXIT_FAILURE);
     }
-    int len = ntohs(recv_len);
+    const int len = ntohs(recv_len);
 
     char recv_char[len];
     if (recv(conn_sockfd, &recv_char, sizeof(char) * len, PF_UNSPEC) == -1)
@@ -438,6 +336,280 @@ void free_cmd(command_t *cmd)
     free(cmd);
 }
 
+/**
+ * @brief Recieves and executes a command from a controller 
+ * 
+ * @param conn_sockfd 
+ */
+void handle_cmd(int conn_sockfd)
+{
+    int recv_val;
+    char *file = NULL, *log = NULL, *out = NULL, *time = NULL;
+    command_t *cmd = malloc(sizeof(command_t));
+    cmd->argc = 0;
+
+    recv_cmd_field(conn_sockfd, &file);
+    cmd->file = strdup(file);
+    if (file)
+        free(file);
+
+    recv_cmd_field(conn_sockfd, &log);
+    cmd->log = strdup(log);
+    if (log)
+        free(log);
+
+    recv_cmd_field(conn_sockfd, &out);
+    cmd->out = strdup(out);
+    if (out)
+        free(out);
+
+    recv_cmd_field(conn_sockfd, &time);
+    cmd->time = strdup(time);
+    if (time)
+        free(time);
+
+    if (recv(conn_sockfd, &recv_val, sizeof(int), PF_UNSPEC) == -1)
+    {
+        perror("recv");
+        exit(EXIT_FAILURE);
+    }
+
+    cmd->argc = ntohs(recv_val);
+
+    cmd->argv = malloc(sizeof(char *) * cmd->argc);
+    // Receive command args
+    if (cmd->argc > 0)
+    {
+        for (int i = 0; i < cmd->argc; i++)
+        {
+            recv_cmd_field(conn_sockfd, &cmd->argv[i]);
+        }
+    }
+
+    close_sock(conn_sockfd);
+
+    if (cmd->log[0] == '\0')
+    {
+        cmd->log_output = stdout;
+    }
+    else
+    {
+        FILE *logfile;
+        logfile = fopen(cmd->log, "a");
+        if (logfile == NULL)
+        {
+            fprintf(stderr, "Logfile error\n");
+            exit(EXIT_FAILURE);
+        }
+        cmd->log_output = logfile;
+    }
+
+    exec_cmd(cmd);
+
+    // If process was not printing to stdout close the logfile
+    if (cmd->log_output != stdout)
+    {
+        fclose(cmd->log_output);
+    }
+
+    free_cmd(cmd);
+}
+
+/**
+ * @brief Sends a memory record entry
+ * 
+ * @param conn_sockfd 
+ * @param entry 
+ */
+void send_mem_entry(int conn_sockfd, char *entry)
+{
+    const int len = strlen(entry) + 1;
+    const int val = htons(len);
+    if (send(conn_sockfd, &val, sizeof(int), PF_UNSPEC) == -1)
+    {
+        perror("send");
+        exit(EXIT_FAILURE);
+    }
+
+    if (send(conn_sockfd, entry, len, PF_UNSPEC) == -1)
+    {
+        perror("send");
+        exit(EXIT_FAILURE);
+    }
+}
+
+/**
+ * @brief Gets the latest memory record entries for each currently running process and returns to the controller
+ * 
+ * @param conn_sockfd 
+ */
+void handle_mem_all(int conn_sockfd)
+{
+    pid_t pids[NUM_HANDLER_THREADS];
+    char *mem_entries[NUM_HANDLER_THREADS];
+    int pids_n = 0, mem_n = 0;
+
+    lock_proc_mutex();
+    proc_entry_t *curr = procs;
+    while (curr != NULL)
+    {
+        if (!pid_in_arr(curr->pid, pids, pids_n))
+        {
+            mem_entries[mem_n] = NULL;
+            sasprintf(mem_entries[mem_n], "%d %d %s", curr->pid, curr->bytes, curr->cmd->file);
+
+            for (int i = 0; i < curr->cmd->argc; i++)
+            {
+                sasprintf(mem_entries[mem_n], "%s %s", mem_entries[mem_n], curr->cmd->argv[i])
+            }
+
+            pids[pids_n] = curr->pid;
+            pids_n++;
+            mem_n++;
+        }
+        curr = curr->next;
+    }
+
+    unlock_proc_mutex();
+
+    int send_val = htons(mem_n);
+    if (send(conn_sockfd, &send_val, sizeof(int), PF_UNSPEC) == -1)
+    {
+        perror("send");
+        exit(EXIT_FAILURE);
+    }
+
+    for (int i = 0; i < mem_n; i++)
+    {
+        send_mem_entry(conn_sockfd, mem_entries[i]);
+        free(mem_entries[i]);
+    }
+
+    close_sock(conn_sockfd);
+}
+
+/**
+ * @brief Gets all memory entry records for the process specified by the supplied pid and returns to the controller
+ * 
+ * @param conn_sockfd 
+ */
+void handle_mem_pid(int conn_sockfd)
+{
+
+    pid_t pid;
+    if (recv(conn_sockfd, &pid, sizeof(int), PF_UNSPEC) == -1)
+    {
+        perror("recv");
+        exit(EXIT_FAILURE);
+    }
+    pid = ntohs(pid);
+
+    lock_proc_mutex();
+    proc_entry_t *curr = procs;
+    char **mem_entrys = (char **)malloc(0 * sizeof(char *));
+    int mem_n = 0;
+
+    while (curr != NULL)
+    {
+        if (curr->pid == pid)
+        {
+            mem_entrys = (char **)realloc(mem_entrys, (mem_n + 1) * sizeof(char *));
+            size_t needed = snprintf(NULL, 0, "%s %d\n", curr->time, curr->bytes) + 1;
+            mem_entrys[mem_n] = malloc(needed);
+            sprintf(mem_entrys[mem_n], "%s %d", curr->time, curr->bytes);
+            mem_n++;
+        }
+        curr = curr->next;
+    }
+
+    unlock_proc_mutex();
+
+    int send_val = htons(mem_n);
+    if (send(conn_sockfd, &send_val, sizeof(int), PF_UNSPEC) == -1)
+    {
+        perror("send");
+        exit(EXIT_FAILURE);
+    }
+
+    for (int i = 0; i < mem_n; i++)
+    {
+        send_mem_entry(conn_sockfd, mem_entrys[i]);
+        free(mem_entrys[i]);
+    }
+    free(mem_entrys);
+
+    close_sock(conn_sockfd);
+}
+
+/**
+ * @brief Receives a memkill message from the controller and sends SIGKILL to processes over the 
+ * 
+ * @param conn_sockfd 
+ */
+void handle_memkill(int conn_sockfd)
+{
+    int len;
+    if (recv(conn_sockfd, &len, sizeof(int), PF_UNSPEC) == -1)
+    {
+        perror("recv");
+        exit(EXIT_FAILURE);
+    }
+    len = ntohs(len);
+
+    char mem_kill_c[len];
+    if (recv(conn_sockfd, &mem_kill_c, sizeof(char) * len, PF_UNSPEC) == -1)
+    {
+        perror("recv");
+        exit(EXIT_FAILURE);
+    }
+    close_sock(conn_sockfd);
+
+    float mem_threshold = strtof(mem_kill_c, NULL);
+
+    struct sysinfo sys_info;
+    if (sysinfo(&sys_info) == -1)
+    {
+        perror("sysinfo");
+        exit(EXIT_FAILURE);
+    }
+    unsigned long total_mem = sys_info.totalram;
+
+    pid_t pids[NUM_HANDLER_THREADS], to_kill[NUM_HANDLER_THREADS];
+    int pids_n = 0, to_kill_n = 0;
+
+    lock_proc_mutex();
+    proc_entry_t *curr = procs;
+
+    while (curr != NULL)
+    {
+        if (!pid_in_arr(curr->pid, pids, pids_n))
+        {
+            double using = ((double)curr->bytes / (double)total_mem) * 100;
+            if (using > (double)mem_threshold)
+            {
+                to_kill[to_kill_n] = curr->pid;
+                pids[pids_n] = curr->pid;
+                to_kill_n++;
+                pids_n++;
+            }
+        }
+        curr = curr->next;
+    }
+
+    unlock_proc_mutex();
+
+    for (int i = 0; i < to_kill_n; i++)
+    {
+        kill(to_kill[i], SIGKILL);
+        sleep(1);
+    }
+}
+
+/**
+ * @brief Handles a connection to the overseer
+ * 
+ * @param arg 
+ */
 void handle_conn(void *arg)
 {
     int val;
@@ -449,94 +621,40 @@ void handle_conn(void *arg)
     }
     msg_t msg = ntohs(val);
 
-    // Receive and execute command
     if (msg == cmd_msg_t)
     {
-        int recv_val;
-        char *file, *log, *out, *time;
-        command_t *cmd = malloc(sizeof(command_t));
-        cmd->argc = 0;
-
-        recv_cmd_field(*conn_sockfd, &file);
-        cmd->file = strdup(file);
-        if (file)
-            free(file);
-
-        recv_cmd_field(*conn_sockfd, &log);
-        cmd->log = strdup(log);
-        if (log)
-            free(log);
-
-        recv_cmd_field(*conn_sockfd, &out);
-        cmd->out = strdup(out);
-        if (out)
-            free(out);
-
-        recv_cmd_field(*conn_sockfd, &time);
-        cmd->time = strdup(time);
-        if (time)
-            free(time);
-
-        if (recv(*conn_sockfd, &recv_val, sizeof(int), PF_UNSPEC) == -1)
-        {
-            perror("recv");
-            exit(EXIT_FAILURE);
-        }
-
-        cmd->argc = ntohs(recv_val);
-
-        cmd->argv = malloc(sizeof(char *) * cmd->argc);
-        // Receive command args
-        if (cmd->argc > 0)
-        {
-            for (int i = 0; i < cmd->argc; i++)
-            {
-                recv_cmd_field(*conn_sockfd, &cmd->argv[i]);
-            }
-        }
-
-        close_sock(*conn_sockfd);
-
-        if (cmd->log[0] == '\0')
-        {
-            cmd->log_output = stdout;
-        }
-        else
-        {
-            FILE *logfile;
-            logfile = fopen(cmd->log, "a");
-            if (logfile == NULL)
-            {
-                fprintf(stderr, "Logfile error\n");
-                exit(EXIT_FAILURE);
-            }
-            cmd->log_output = logfile;
-        }
-
-        exec_cmd(cmd);
-
-        // If process was not printing to stdout close the logfile
-        if (cmd->log_output != stdout)
-        {
-            fclose(cmd->log_output);
-        }
-
-        free_cmd(cmd);
+        handle_cmd(*conn_sockfd);
     }
+    else if (msg == mem_all_msg_t)
+    {
+        handle_mem_all(*conn_sockfd);
+    }
+    else if (msg == mem_pid_msg_t)
+    {
+        handle_mem_pid(*conn_sockfd);
+    }
+    else if (msg == memkill_msg_t)
+    {
+        handle_memkill(*conn_sockfd);
+    }
+    free(arg);
 }
 
+/**
+ * @brief Handles a SIGINT signal
+ * 
+ */
 void interrupt_handler()
 {
-    kill_all_procs(processes);
+    quitting = 1;
+    kill_all_procs();
+    quit_threads();
     close_sock(sockfd);
     exit(EXIT_SUCCESS);
 }
 
 int main(int argc, char *argv[])
 {
-    int i;
-    int thr_id[NUM_HANDLER_THREADS];
-    pthread_t p_threads[NUM_HANDLER_THREADS];
     int new_fd;
     struct sockaddr_in my_addr;
     struct sockaddr_in their_addr;
@@ -558,16 +676,7 @@ int main(int argc, char *argv[])
         exit(EXIT_FAILURE);
     }
 
-    pthread_mutex_init(&request_mutex, NULL);
-    pthread_mutex_init(&quit_mutex, NULL);
-    pthread_mutex_init(&process_mutex, NULL);
-    pthread_cond_init(&got_request, NULL);
-
-    for (i = 0; i < NUM_HANDLER_THREADS; i++)
-    {
-        thr_id[i] = i;
-        pthread_create(&p_threads[i], NULL, handle_requests_loop, &thr_id[i]);
-    }
+    init_threadpool();
 
     int opt_enable = 1;
     setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &opt_enable, sizeof(opt_enable));
@@ -591,6 +700,7 @@ int main(int argc, char *argv[])
         exit(EXIT_FAILURE);
     }
 
+    char time[TIME_LEN];
     while (1)
     {
         sin_size = sizeof(struct sockaddr_in);
@@ -604,7 +714,8 @@ int main(int argc, char *argv[])
         int *fd = (int *)memory;
         *fd = new_fd;
 
-        printf("%s - connection received from %s\n", get_time(), inet_ntoa(their_addr.sin_addr));
+        get_time(time);
+        printf("%s - connection received from %s\n", time, inet_ntoa(their_addr.sin_addr));
 
         add_request(handle_conn, fd);
     }
