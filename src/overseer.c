@@ -153,6 +153,37 @@ proc_entry_t *add_proc_mem_entry(pid_t pid, int bytes, command_t *cmd)
     return new_proc;
 }
 
+/**
+ * @brief Manually ends a process
+ * 
+ * @param pid 
+ * @return int status code
+ */
+int end_process(command_t *cmd, pid_t pid)
+{
+    int status;
+    time_t start, end;
+    double elapsed;
+    kill(pid, SIGTERM);
+    print_exec_cmd_sent_signal(cmd, pid, SIGTERM);
+
+    start = time(NULL);
+    do
+    {
+        end = time(NULL);
+        elapsed = difftime(end, start);
+        sleep(1);
+    } while (kill(pid, 0) == 0 && elapsed < KILL_WAIT);
+
+    // If the process is still running 5 seconds after sending SIGTERM, must kill
+    if (waitpid(pid, &status, WNOHANG) == 0)
+    {
+        kill(pid, SIGKILL);
+        print_exec_cmd_sent_signal(cmd, pid, SIGKILL);
+    }
+    return status;
+}
+
 void exec_cmd(command_t *cmd)
 {
     bool end_manually = false;
@@ -246,23 +277,7 @@ void exec_cmd(command_t *cmd)
     // Has timed out, must end manually
     if (end_manually)
     {
-        kill(ret, SIGTERM);
-        print_exec_cmd_sent_signal(cmd, ret, SIGTERM);
-
-        start = time(NULL);
-        do
-        {
-            end = time(NULL);
-            elapsed = difftime(end, start);
-            sleep(1);
-        } while (kill(ret, 0) == 0 && elapsed < KILL_WAIT);
-
-        // If the process is still running 5 seconds after sending SIGTERM, must kill
-        if (waitpid(ret, &status, WNOHANG) == 0)
-        {
-            kill(ret, SIGKILL);
-            print_exec_cmd_sent_signal(cmd, ret, SIGKILL);
-        }
+        status = end_process(cmd, ret);
     }
 
     if ((WIFEXITED(status) || WIFSIGNALED(status)) && !quitting)
