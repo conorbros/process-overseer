@@ -26,9 +26,15 @@ typedef struct sock
 
 sock_t *overseer_sock;
 
-void print_usage()
+void print_usage(bool err)
 {
-    fprintf(stderr, "Usage: controller <address> <port> {[-o out_file] [-log log_file] [-t seconds] <file> [arg...] | mem [pid] | memkill <percent>}\n");
+    FILE *out;
+    if (err)
+        out = stderr;
+    else
+        out = stdout;
+
+    fprintf(out, "Usage: controller <address> <port> {[-o out_file] [-log log_file] [-t seconds] <file> [arg...] | mem [pid] | memkill <percent>}\n");
 }
 
 void print_could_not_connect(char *hostname, in_port_t port)
@@ -97,7 +103,7 @@ void get_cmd_args(int argc, char *argv[], command_t *cmd)
         {
             if (opts[0])
             {
-                print_usage();
+                print_usage(true);
                 exit(EXIT_FAILURE);
             }
 
@@ -108,7 +114,7 @@ void get_cmd_args(int argc, char *argv[], command_t *cmd)
         {
             if (opts[1])
             {
-                print_usage();
+                print_usage(true);
                 exit(EXIT_FAILURE);
             }
             cmd->log = argv[i + 1];
@@ -119,7 +125,7 @@ void get_cmd_args(int argc, char *argv[], command_t *cmd)
         {
             if (!is_str_number(argv[i + 1]) || opts[2])
             {
-                print_usage();
+                print_usage(true);
                 exit(EXIT_FAILURE);
             }
             cmd->time = argv[i + 1];
@@ -147,7 +153,7 @@ void get_cmd_args(int argc, char *argv[], command_t *cmd)
     if (cmd->file == NULL)
     {
         free_cmd(cmd);
-        print_usage();
+        print_usage(true);
         exit(EXIT_FAILURE);
     }
 }
@@ -335,7 +341,7 @@ void handle_mem_pid(char **argv)
 
     if (!is_str_number(argv[4]))
     {
-        print_usage();
+        print_usage(true);
         return;
     }
 
@@ -405,20 +411,20 @@ void handle_memkill(int argc, char **argv)
 {
     if (argc < 5)
     {
-        print_usage();
+        print_usage(true);
         return;
     }
 
     if (!is_int_or_float(argv[4]))
     {
-        print_usage();
+        print_usage(true);
         return;
     }
 
     float mem_threshold_f = strtof(argv[4], NULL);
     if (mem_threshold_f > (float)100 || mem_threshold_f < (float)0)
     {
-        print_usage();
+        print_usage(true);
         return;
     }
 
@@ -447,13 +453,13 @@ int main(int argc, char *argv[])
 
     if (argc < 4)
     {
-        print_usage();
+        print_usage(true);
         exit(EXIT_FAILURE);
     }
 
     if (strcmp(argv[1], "--help") == 0)
     {
-        print_usage();
+        print_usage(false);
         exit(EXIT_SUCCESS);
     }
 
@@ -463,7 +469,7 @@ int main(int argc, char *argv[])
     hostname = argv[1];
     if (!is_str_number(argv[2]))
     {
-        print_usage();
+        print_usage(true);
         exit(EXIT_FAILURE);
     }
     overseer_sock->port = atoi(argv[2]);

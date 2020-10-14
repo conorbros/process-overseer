@@ -13,31 +13,31 @@ void print_exec_cmd_attempt(command_t *cmd)
 {
     char time[TIME_LEN];
     get_time(time);
-    fprintf(cmd->log_output, "%s - attempting to execute %s", time, cmd->file);
+    fprintf(cmd->log_file, "%s - attempting to execute %s", time, cmd->file);
     for (int i = 0; i < cmd->argc; i++)
     {
-        fprintf(cmd->log_output, " %s", cmd->argv[i]);
+        fprintf(cmd->log_file, " %s", cmd->argv[i]);
     }
-    fprintf(cmd->log_output, "\n");
+    fprintf(cmd->log_file, "\n");
 }
 
 void print_exec_cmd_err(command_t *cmd)
 {
     char time[TIME_LEN];
     get_time(time);
-    fprintf(cmd->log_output, "%s - could not execute %s", time, cmd->file);
+    fprintf(cmd->log_file, "%s - could not execute %s", time, cmd->file);
     for (int i = 0; i < cmd->argc; i++)
     {
-        fprintf(cmd->log_output, " %s", cmd->argv[i]);
+        fprintf(cmd->log_file, " %s", cmd->argv[i]);
     }
-    fprintf(cmd->log_output, "\n");
+    fprintf(cmd->log_file, "\n");
 }
 
 void print_exec_cmd_exit(command_t *cmd, pid_t pid, int status)
 {
     char time[TIME_LEN];
     get_time(time);
-    fprintf(cmd->log_output, "%s - %d has terminated with the exit status code %d\n", time, pid, status);
+    fprintf(cmd->log_file, "%s - %d has terminated with the exit status code %d\n", time, pid, status);
 }
 
 void print_exec_cmd_sent_signal(command_t *cmd, pid_t pid, int sig)
@@ -46,11 +46,11 @@ void print_exec_cmd_sent_signal(command_t *cmd, pid_t pid, int sig)
     get_time(time);
     if (sig == SIGTERM)
     {
-        fprintf(cmd->log_output, "%s - sent SIGTERM to %d\n", time, pid);
+        fprintf(cmd->log_file, "%s - sent SIGTERM to %d\n", time, pid);
     }
     else if (sig == SIGKILL)
     {
-        fprintf(cmd->log_output, "%s - sent SIGKILL to %d\n", time, pid);
+        fprintf(cmd->log_file, "%s - sent SIGKILL to %d\n", time, pid);
     }
 }
 
@@ -58,13 +58,13 @@ void print_exec_cmd(command_t *cmd, pid_t pid)
 {
     char time[TIME_LEN];
     get_time(time);
-    fprintf(cmd->log_output, "%s - %s", time, cmd->file);
+    fprintf(cmd->log_file, "%s - %s", time, cmd->file);
     for (int i = 0; i < cmd->argc; i++)
     {
-        fprintf(cmd->log_output, " %s", cmd->argv[i]);
+        fprintf(cmd->log_file, " %s", cmd->argv[i]);
     }
-    fprintf(cmd->log_output, " has been executed with pid %d", pid);
-    fprintf(cmd->log_output, "\n");
+    fprintf(cmd->log_file, " has been executed with pid %d", pid);
+    fprintf(cmd->log_file, "\n");
 }
 
 /**

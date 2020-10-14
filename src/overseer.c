@@ -41,8 +41,6 @@ int sockfd;
 
 pthread_mutex_t proc_mutex = PTHREAD_ERRORCHECK_MUTEX_INITIALIZER_NP;
 proc_entry_t *procs = NULL;
-proc_entry_t *last_proc = NULL;
-int num_procs = 0;
 
 void lock_proc_mutex()
 {
@@ -389,7 +387,7 @@ void handle_cmd(int conn_sockfd)
 
     if (cmd->log[0] == '\0')
     {
-        cmd->log_output = stdout;
+        cmd->log_file = stdout;
     }
     else
     {
@@ -400,15 +398,15 @@ void handle_cmd(int conn_sockfd)
             fprintf(stderr, "Logfile error\n");
             exit(EXIT_FAILURE);
         }
-        cmd->log_output = logfile;
+        cmd->log_file = logfile;
     }
 
     exec_cmd(cmd);
 
     // If process was not printing to stdout close the logfile
-    if (cmd->log_output != stdout)
+    if (cmd->log_file != stdout)
     {
-        fclose(cmd->log_output);
+        fclose(cmd->log_file);
     }
 
     free_cmd(cmd);
