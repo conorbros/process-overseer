@@ -80,7 +80,6 @@ proc_maps_entries **get_proc_maps(pid_t pid)
 {
     char path[DEFAULT_PATH_SIZE];
     FILE *file = NULL;
-    // int errno_saver = 0;
     proc_maps_entries **entries = NULL;
 
     sprintf(path, "/proc/%d/maps", pid);
@@ -133,7 +132,7 @@ unsigned long addr_len(unsigned long long start, unsigned long long end)
 int get_bytes_proc_using(pid_t pid)
 {
     proc_maps_entries **results = get_proc_maps(pid);
-    unsigned long long bytes = 0;
+    unsigned long bytes = 0;
     int i = 0;
     while (results[i] != NULL)
     {
