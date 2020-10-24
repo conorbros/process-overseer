@@ -9,6 +9,7 @@
 #include <sys/wait.h>
 #include <sys/stat.h>
 #include <sys/sysinfo.h>
+#include <ctype.h>
 #include <fcntl.h>
 #include <pthread.h>
 #include <signal.h>
@@ -653,6 +654,24 @@ void handle_conn(void *arg)
 }
 
 /**
+ * @brief Determines if the supplied string contains digits only
+ * 
+ * @param string 
+ * @return true 
+ * @return false 
+ */
+bool is_str_number(const char *string)
+{
+    const int len = strlen(string);
+    for (int i = 0; i < len; ++i)
+    {
+        if (!isdigit(string[i]))
+            return false;
+    }
+    return true;
+}
+
+/**
  * @brief Handles a SIGINT signal
  * 
  */
@@ -675,10 +694,15 @@ int main(int argc, char *argv[])
 
     signal(SIGINT, interrupt_handler);
 
-    if (argc < 2)
+    if (argc > 2)
     {
         fprintf(stderr, "Usage: <port>\n");
-        return 1;
+        exit(EXIT_FAILURE);
+    }
+    if (!is_str_number(argv[1]))
+    {
+        fprintf(stderr, "Usage: <port>\n");
+        exit(EXIT_FAILURE);
     }
     port = atoi(argv[1]);
 
