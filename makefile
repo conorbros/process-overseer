@@ -10,6 +10,7 @@ SRC := src
 all: overseer controller timer timer2
 
 overseer: ./src/overseer.c ./src/proc_map.c ./src/log.c ./src/thread_pool.c
+	mkdir build
 	$(CXX) $(FLAGS) -I$(INCLUDE) -o ./$(BIN)/overseer ./$(SRC)/overseer.c ./$(SRC)/proc_map.c ./src/log.c ./src/thread_pool.c
 
 controller: ./src/controller.c
