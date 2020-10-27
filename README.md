@@ -25,7 +25,7 @@ There are three usages of the controller.
 controller <address> <port> {[-o out_file] [-log log_file] [-t seconds] <file> [arg...] | mem [pid] | memkill <percent>}
 ```
 
-This command will send a command to execute the file specified by `<file>` with the arguments in `[args...]`. There are options for the file to redirect output of the process to, the file that the overseer will log its running of the process and the time in seconds to wait before killing the process. The default timeout is 10 seconds. If a process does not terminate 5 seconds after sending a `SIGTERM`, the process will be killed with `SIGKILL`.
+This command will send a command to execute the file specified by `<file>` with the arguments in `[args...]`. There are options for the file to redirect `stdout` and `stderr` of the process to, the file that the overseer will log its running of the process and the time in seconds to wait before killing the process. The default timeout is 10 seconds. If a process does not terminate 5 seconds after sending a `SIGTERM`, the process will be killed with `SIGKILL`.
 
 ```Bash
 controller <address> <port> -o [out_file] -log [log_file] -t [seconds] <file> [args...]
